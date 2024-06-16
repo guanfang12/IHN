@@ -85,7 +85,7 @@ if __name__ == '__main__':
     device = torch.device('cuda:'+ str(args.gpuid[0]))
 
     model = IHN(args)
-    model_med = torch.load(args.model, map_location='cuda:1')
+    model_med = torch.load(args.model, map_location='cuda:0')
     model.load_state_dict(model_med)
 
     model.to(device) 

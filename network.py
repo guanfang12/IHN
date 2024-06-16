@@ -7,6 +7,7 @@ from extractor import BasicEncoderQuarter
 from corr import CorrBlock
 from utils import *
 
+
 autocast = torch.cuda.amp.autocast
 
 class IHN(nn.Module):
@@ -25,7 +26,7 @@ class IHN(nn.Module):
             self.update_block_2 = GMA(self.args, sz)
 
     def get_flow_now_4(self, four_point):
-        four_point = four_point / 4
+        four_point = four_point / 4 # four_point 是原图的尺寸， coordinate 是特征图尺寸
         four_point_org = torch.zeros((2, 2, 2)).to(four_point.device)
         four_point_org[:, 0, 0] = torch.Tensor([0, 0])
         four_point_org[:, 0, 1] = torch.Tensor([self.sz[3]-1, 0])
@@ -87,44 +88,55 @@ class IHN(nn.Module):
         return coords0, coords1
 
     def forward(self, image1, image2 , iters_lev0 = 6, iters_lev1=3, test_mode=False):
+        # writer.add_image("image1",image1[0],0,dataformats="CHW")
         image1 = 2 * (image1 / 255.0) - 1.0
         image2 = 2 * (image2 / 255.0) - 1.0
         image1 = image1.contiguous()
         image2 = image2.contiguous()
 
         with autocast(enabled=self.args.mixed_precision):
-            fmap1_32, fmap1_64 = self.fnet1(image1)
+            fmap1_32, fmap1_64 = self.fnet1(image1) # 32 ,64 意思为特征图尺寸
             fmap2_32, _ = self.fnet1(image2)
         fmap1 = fmap1_32.float()
-        fmap2 = fmap2_32.float()
+        fmap2 = fmap2_32.float() # [1,256,32,32]
+
+        # 加载特征图        
+        # writer.add_image("feature_map",get_feature_show(fmap1),0,dataformats="HWC")
 
         corr_fn = CorrBlock(fmap1, fmap2, num_levels=2, radius=4, sz=32)
-        coords0, coords1 = self.initialize_flow_4(image1)
+        coords0, coords1 = self.initialize_flow_4(image1) #   H//4 因为特征图缩小了1/4
         sz = fmap1_32.shape
-        self.sz = sz
+        self.sz = sz  # [1, 256, 32, 32]
         four_point_disp = torch.zeros((sz[0], 2, 2, 2)).to(fmap1.device)
 
+        flow_predictions =[] ## for train 
         for itr in range(iters_lev0):
-            corr = corr_fn(coords1)
-            flow = coords1 - coords0
+            corr = corr_fn(coords1) # batch*channel*H*W  correlation
+            flow = coords1 - coords0 # [batch,2, H, W] [1, 2, 32, 32] mean x, y
             with autocast(enabled=self.args.mixed_precision):
                 if self.args.weight:
                     delta_four_point, weight = self.update_block_4(corr, flow)
+                    # writer.add_image("Mask",weight[0],0,dataformats="CHW")
                 else:
-                    delta_four_point = self.update_block_4(corr, flow)
+                    delta_four_point = self.update_block_4(corr, flow) # input shape: [b,2+channel,H,W] , output shape [b,2,2,2]
                     
+            # print(torch.cat((corr, flow),dim =1))
             four_point_disp =  four_point_disp + delta_four_point
             coords1 = self.get_flow_now_4(four_point_disp)
+            flow_predictions.append(four_point_disp) ## for train 
+        
+        # writer.add_image("feature_map1",fmap1[0][-3:,:,:],0,dataformats="CHW")
+        # writer.close()
 
 
         if self.args.lev1:# next resolution
             four_point_disp_med = four_point_disp 
             flow_med = coords1 - coords0
             flow_med = F.upsample_bilinear(flow_med, None, [4, 4]) * 4    
-            image2 = warp(image2, flow_med)
+            image2_ = warp(image2, flow_med)
                       
             with autocast(enabled=self.args.mixed_precision):
-                _, fmap2_64 = self.fnet1(image2)
+                _, fmap2_64 = self.fnet1(image2_)
             fmap1 = fmap1_64.float()
             fmap2 = fmap2_64.float()
             
@@ -143,12 +155,17 @@ class IHN(nn.Module):
                     else:
                         delta_four_point = self.update_block_2(corr, flow)
                 four_point_disp = four_point_disp + delta_four_point            
-                coords1 = self.get_flow_now_2(four_point_disp)            
+                coords1 = self.get_flow_now_2(four_point_disp)
+                flow_predictions.append(four_point_disp + four_point_disp_med) ## for train      
             
             four_point_disp = four_point_disp + four_point_disp_med
 
 
-        return four_point_disp
+        # return four_point_disp
+        if test_mode:
+            return four_point_disp, fmap1, fmap2
+            
+        return flow_predictions
 
 
 

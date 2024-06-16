@@ -11,14 +11,14 @@ except:
 
 
 class CorrBlock:
-    def __init__(self, fmap1, fmap2, num_levels=4, radius=4, sz=32):
+    def __init__(self, fmap1, fmap2, num_levels=4, radius=4, sz=32): # 2 4 32
         self.num_levels = num_levels
         self.radius = radius
         self.corr_pyramid = []
 
         corr = CorrBlock.corr(fmap1, fmap2,sz)
         batch, h1, w1, dim, h2, w2 = corr.shape
-        corr = corr.reshape(batch * h1 * w1, dim, h2, w2)
+        corr = corr.reshape(batch * h1 * w1, dim, h2, w2) # b*1*h*w  [1024, 1, 32, 32]
 
         self.corr_pyramid.append(corr)
         for i in range(self.num_levels - 1):
@@ -27,26 +27,28 @@ class CorrBlock:
 
     def __call__(self, coords):
         r = self.radius
-        coords = coords.permute(0, 2, 3, 1)
+        coords = coords.permute(0, 2, 3, 1) # batch*h*w*2 
+        # print(coords[0,15,25,:])  25, 15
         batch, h1, w1, _ = coords.shape
 
         out_pyramid = []
         for i in range(self.num_levels):
             corr = self.corr_pyramid[i]
-            dx = torch.linspace(-r, r, 2 * r + 1)
+            dx = torch.linspace(-r, r, 2 * r + 1)  # [-4,-3,-2., -1.,  0.,  1.,  2.,3,4]
             dy = torch.linspace(-r, r, 2 * r + 1)
-            delta = torch.stack(torch.meshgrid(dy, dx), axis=-1).to(coords.device)
+            delta = torch.stack(torch.meshgrid(dy, dx), axis=-1).to(coords.device) # 9*9*2 (y,x)
 
-            centroid_lvl = coords.reshape(batch * h1 * w1, 1, 1, 2) / 2 ** i
-            delta_lvl = delta.view(1, 2 * r + 1, 2 * r + 1, 2)
-            coords_lvl = centroid_lvl + delta_lvl
+            centroid_lvl = coords.reshape(batch * h1 * w1, 1, 1, 2) / 2 ** i # [1*32*32,1,1,2]
+            delta_lvl = delta.view(1, 2 * r + 1, 2 * r + 1, 2) # [1, 9, 9, 2]
+            coords_lvl = centroid_lvl + delta_lvl # [1024, 9, 9, 2]
 
-            corr = bilinear_sampler(corr, coords_lvl)
-            corr = corr.view(batch, h1, w1, -1)
+            corr = bilinear_sampler(corr, coords_lvl) # [1024, 1,9,9]
+            corr = corr.view(batch, h1, w1, -1) # [1, 32, 32, 81]
             out_pyramid.append(corr)
 
-        out = torch.cat(out_pyramid, dim=-1)
-        return out.permute(0, 3, 1, 2).contiguous().float()
+        out = torch.cat(out_pyramid, dim=-1) # [1, 32, 32, 162] 相当于对于image_src特征图上的每个像素获得了一个 162维特征
+                                                                                        #  该特征包含的信息为 local correlation 
+        return out.permute(0, 3, 1, 2).contiguous().float() # batch*channel*H*W
 
     @staticmethod
     def corr(fmap1, fmap2, sz):

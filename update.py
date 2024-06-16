@@ -203,6 +203,7 @@ class CNN(nn.Module):
         super(CNN, self).__init__()
 
         outputdim = input_dim
+        # 164 = 81*2+2 = 9*9*2+2
         self.layer1 = nn.Sequential(nn.Conv2d(164, outputdim, 3, padding=1, stride=1),
                                     nn.GroupNorm(num_groups=outputdim//8, num_channels=outputdim), nn.ReLU(), nn.MaxPool2d(kernel_size = 2, stride=2))
 
